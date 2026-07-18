@@ -8,7 +8,8 @@ A pre-folded paper airplane flies into a wall and forms new creases on impact. T
 
 - **VBD solver** maintaining folded rest shape during flight
 - **Crease plasticity** (Narain et al. 2013) creating permanent fold lines on collision
-- **ViewerRTX** headless ray-traced rendering
+- **ViewerRTX** interactive ray-traced rendering
+- **USD-first scene** with composed deformable and collision schemas
 
 ## Key Insight
 
@@ -22,7 +23,8 @@ Setting `edge_rest_angle` to match the dihedral angles of the pre-folded mesh al
 | `crease_plasticity.py` | Crease plasticity module (Narain et al. 2013) |
 | `example_cloth_crease.py` | Reference: cloth dropping on wedge |
 | `create_dart_usd.py` | Tool: convert dart.obj to USD |
-| `dart.usda` | Paper airplane mesh in USD format |
+| `meshes/dart.usda` | Paper airplane mesh, cloth schemas, paper thickness and material |
+| `meshes/scene.usda` | Unified scene referencing `dart.usda`, with wall/ground colliders |
 
 ## Results
 
@@ -63,14 +65,27 @@ python -c "import warp as wp; wp.init(); print(wp.get_devices())"
 python dart_crash_rtx.py
 ```
 
-This will:
-1. Load `dart.obj` (from ARCSim) and subdivide to 369 verts / 640 faces
-2. Compute dihedral angles of the folded shape → set as VBD rest angles
-3. Simulate flight at 10 m/s into a wall
-4. Render with ViewerRTX (headless ray tracing)
-5. Output `newton_dart_crash.mp4`
+The left UI panel is hidden initially. Press `H` to show/hide it, `Tab` to
+switch between the fixed and follow cameras, or `R` to reset the full dart
+state and relaunch it. The UI's **Reset** button performs the same reset.
 
-The `dart.obj` mesh is included in `meshes/`.
+This will:
+1. Compose `meshes/scene.usda`, which references `meshes/dart.usda`
+2. Import the deformable dart and static wall/ground through `ModelBuilder.add_usd`
+3. Refine the authored dart cage in memory to 369 particles / 640 triangles
+4. Compute folded-geometry dihedral angles as VBD rest angles
+5. Simulate flight at 10 m/s and render it with ViewerRTX
+
+USD stores gravity, cloth thickness/density/stretch/bend values, collision
+schemas, contact stiffness/damping/friction, transforms and display materials.
+Newton currently does not import cloth initial velocity, area stiffness,
+damping, subdivision, or rest bend angles from USD, so those values remain
+small, explicit runtime overrides in `dart_crash_rtx.py`.
+
+USD paper thickness is 2 mm (mass/stiffness). Particle collision radius is
+overridden at runtime to 10 mm with a 50 mm soft-contact margin so the dart
+does not tunnel the wall at 10 m/s. Particle self-contact stays off: folded
+layers sit closer than 2×radius and would explode if enabled.
 
 ## References
 

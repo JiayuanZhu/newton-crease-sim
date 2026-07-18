@@ -14,6 +14,7 @@ Core idea:
   - After each simulation step, compute the elastic bending strain per edge
   - If it exceeds a yield threshold, permanently shift the rest angle
   - Optionally weaken the material at crease locations (damage)
+  - Authored folds can be protected so impact crumples without erasing them
 """
 
 from __future__ import annotations
@@ -83,7 +84,7 @@ def plastic_update_kernel(
     dihedral_angles: wp.array(dtype=wp.float32),
     edge_rest_angle: wp.array(dtype=wp.float32),
     edge_indices: wp.array2d(dtype=wp.int32),
-    yield_angle: float,
+    yield_angles: wp.array(dtype=wp.float32),
     flow_rate: float,
     max_plastic_angle: float,
     damage: wp.array(dtype=wp.float32),
@@ -94,64 +95,60 @@ def plastic_update_kernel(
 
     For each edge:
       elastic_strain = theta_current - theta_rest
-      if |elastic_strain| > yield_angle:
+      if |elastic_strain| > yield_angle[edge]:
           plastic_increment = flow_rate * (|elastic_strain| - yield_angle) * sign(elastic_strain)
           theta_rest += plastic_increment
           damage += |plastic_increment| * damage_rate
+
+    Authored folds may use a higher yield_angle but still plasticize under large strain.
     """
     idx = wp.tid()
 
-    # Skip boundary edges
+    # Skip boundary edges. Authored folds may use a higher yield, but they are
+    # never hard-locked: large impact strain must plasticize or the dart springs back.
     if edge_indices[idx, 0] == -1 or edge_indices[idx, 1] == -1:
         return
 
     theta = dihedral_angles[idx]
     rest = edge_rest_angle[idx]
+    yield_angle = yield_angles[idx]
 
     elastic_strain = theta - rest
-
     abs_strain = wp.abs(elastic_strain)
 
     if abs_strain > yield_angle:
-        # Compute plastic flow
         excess = abs_strain - yield_angle
         increment = flow_rate * excess
 
-        # Apply sign
         if elastic_strain > 0.0:
             new_rest = rest + increment
         else:
             new_rest = rest - increment
 
-        # Clamp total plastic deformation
         if new_rest > max_plastic_angle:
             new_rest = max_plastic_angle
         elif new_rest < -max_plastic_angle:
             new_rest = -max_plastic_angle
 
         edge_rest_angle[idx] = new_rest
-
-        # Accumulate damage
         damage[idx] = damage[idx] + increment * damage_rate
 
 
 @wp.kernel
 def weaken_yield_by_damage(
     damage: wp.array(dtype=wp.float32),
-    base_yield_angle: float,
+    base_yield: wp.array(dtype=wp.float32),
     weakening_factor: float,
     min_yield_angle: float,
     effective_yield: wp.array(dtype=wp.float32),
 ):
     """
     Compute effective yield angle per edge, weakened by accumulated damage.
-    Models how repeated folding makes creases easier to form.
 
     effective_yield = max(base_yield - weakening_factor * damage, min_yield)
     """
     idx = wp.tid()
-    d = damage[idx]
-    ey = base_yield_angle - weakening_factor * d
+    ey = base_yield[idx] - weakening_factor * damage[idx]
     if ey < min_yield_angle:
         ey = min_yield_angle
     effective_yield[idx] = ey
@@ -165,6 +162,7 @@ class CreasePlasticity:
     - Yield criterion based on dihedral angle deviation
     - Plastic flow that permanently modifies rest angles
     - Damage accumulation for material weakening
+    - Optional protection of authored fold edges
 
     Parameters:
         model: Newton Model instance
@@ -196,16 +194,45 @@ class CreasePlasticity:
         self.weakening_factor = weakening_factor
         self.min_yield_angle = min_yield_angle
 
-        # Number of bending edges
         self.num_edges = model.edge_indices.shape[0]
 
-        # Allocate damage and dihedral angle arrays
         self.damage = wp.zeros(self.num_edges, dtype=wp.float32)
         self.dihedral_angles = wp.zeros(self.num_edges, dtype=wp.float32)
+        self.base_yield = wp.zeros(self.num_edges, dtype=wp.float32)
         self.effective_yield = wp.zeros(self.num_edges, dtype=wp.float32)
+        self.fold_edges = wp.zeros(self.num_edges, dtype=wp.int32)
 
-        # Fill effective yield with base value
+        self.base_yield.fill_(yield_angle)
         self.effective_yield.fill_(yield_angle)
+
+    def protect_initial_folds(
+        self,
+        rest_angles,
+        threshold: float = 0.4,
+        protected_yield: float = 0.55,
+    ) -> int:
+        """Raise yield on authored folds so mild flight noise does not erase them.
+
+        Large impact strain still exceeds the elevated yield and plasticizes the
+        fold permanently — otherwise the dart elastically springs back to shape
+        and self-propels after the crash.
+
+        Args:
+            rest_angles: Current rest dihedral angles (wp.array or numpy).
+            threshold: |rest| above this marks an authored fold (radians).
+            protected_yield: Elevated yield for fold edges (still finite).
+
+        Returns:
+            Number of fold edges with elevated yield.
+        """
+        rest = rest_angles.numpy() if hasattr(rest_angles, "numpy") else np.asarray(rest_angles)
+        base = np.full(self.num_edges, self.yield_angle, dtype=np.float32)
+        folds = (np.abs(rest) >= threshold).astype(np.int32)
+        base[folds.astype(bool)] = protected_yield
+        self.base_yield.assign(base)
+        self.effective_yield.assign(base)
+        self.fold_edges.assign(folds)
+        return int(folds.sum())
 
     def step(self, state):
         """
@@ -214,7 +241,6 @@ class CreasePlasticity:
         Args:
             state: Newton State containing current particle positions
         """
-        # 1. Compute current dihedral angles
         wp.launch(
             compute_dihedral_angles,
             dim=self.num_edges,
@@ -225,21 +251,21 @@ class CreasePlasticity:
             ],
         )
 
-        # 2. Optionally update effective yield based on damage
         if self.weakening_factor > 0.0:
             wp.launch(
                 weaken_yield_by_damage,
                 dim=self.num_edges,
                 inputs=[
                     self.damage,
-                    self.yield_angle,
+                    self.base_yield,
                     self.weakening_factor,
                     self.min_yield_angle,
                     self.effective_yield,
                 ],
             )
+        else:
+            self.effective_yield.assign(self.base_yield)
 
-        # 3. Apply plastic update
         wp.launch(
             plastic_update_kernel,
             dim=self.num_edges,
@@ -247,7 +273,7 @@ class CreasePlasticity:
                 self.dihedral_angles,
                 self.model.edge_rest_angle,
                 self.model.edge_indices,
-                self.yield_angle,  # could use per-edge effective_yield for weakening
+                self.effective_yield,
                 self.flow_rate,
                 self.max_plastic_angle,
                 self.damage,
@@ -264,7 +290,6 @@ class CreasePlasticity:
         return self.model.edge_rest_angle.numpy()
 
     def reset(self):
-        """Reset all plastic deformation."""
+        """Reset damage and restore per-edge yield from the protected base map."""
         self.damage.zero_()
-        # Reset rest angles to zero (flat)
-        self.model.edge_rest_angle.zero_()
+        self.effective_yield.assign(self.base_yield)

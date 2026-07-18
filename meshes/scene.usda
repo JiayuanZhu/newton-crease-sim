@@ -1,0 +1,83 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def PhysicsScene "PhysicsScene"
+{
+    vector3f physics:gravityDirection = (0, 0, -1)
+    float physics:gravityMagnitude = 6
+}
+
+def Xform "World"
+{
+    def Scope "PhysicsMaterials"
+    {
+        def Material "GroundContact" (
+            prepend apiSchemas = ["PhysicsMaterialAPI", "NewtonMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.2
+            float newton:contactDamping = 150000
+            float newton:contactStiffness = 100000
+        }
+
+        def Material "WallContact" (
+            prepend apiSchemas = ["PhysicsMaterialAPI", "NewtonMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.2
+            float physics:staticFriction = 1.2
+            float newton:contactDamping = 150000
+            float newton:contactStiffness = 100000
+        }
+    }
+
+    def Scope "StaticGeometry"
+    {
+        # Top surface is exactly z=0.
+        def Cube "Ground" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 2
+            rel material:binding:physics = </World/PhysicsMaterials/GroundContact> (
+                bindMaterialAs = "weakerThanDescendants"
+            )
+            color3f[] primvars:displayColor = [(0.125, 0.125, 0.15)]
+            float3 xformOp:scale = (20, 20, 0.05)
+            double3 xformOp:translate = (0, 0, -0.05)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        # Front collision face is at y=-hy; wall center is y=0.
+        # Keep the wall thicker than the paper collision radius so high-speed
+        # particle contacts have a robust target surface.
+        def Cube "Wall" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+        )
+        {
+            double size = 2
+            rel material:binding:physics = </World/PhysicsMaterials/WallContact> (
+                bindMaterialAs = "weakerThanDescendants"
+            )
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.65)]
+            float3 xformOp:scale = (1.5, 0.05, 1.5)
+            double3 xformOp:translate = (0, 0, 0.5)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def Xform "Dart" (
+        prepend references = @./dart.usda@</root>
+    )
+    {
+        float3 xformOp:scale = (4, 4, 4)
+        double3 xformOp:translate = (0, -5, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}
