@@ -1,53 +1,45 @@
-# Newton Crease Simulation
+# Newton Crease Plasticity — Paper Airplane Crash Demo
 
-Integrating the **Folding and Crumpling** plasticity algorithm from [Narain et al. 2013](https://objf.ai/papers/Narain-FCA-2013-07/) into [NVIDIA Newton](https://github.com/newton-physics/newton)'s VBD (Vertex Block Descent) thin-shell solver.
+Replicating the ARCSim dart crash demo (Narain et al. 2013, Figure 6) using **NVIDIA Newton** physics engine with VBD solver and crease plasticity.
 
-## Concept
+## Overview
 
-Newton's VBD solver simulates thin shells (cloth) using dihedral-angle-based bending energy:
+A pre-folded paper airplane flies into a wall and forms new creases on impact. This demonstrates:
 
-```
-E_bend = k * (θ - θ_rest)²
-```
+- **VBD solver** maintaining folded rest shape during flight
+- **Crease plasticity** (Narain et al. 2013) creating permanent fold lines on collision
+- **ViewerRTX** headless ray-traced rendering
 
-where `θ` is the current dihedral angle and `θ_rest` is the rest angle per edge.
+## Key Insight
 
-**The key insight**: By dynamically updating `θ_rest` when the elastic bending exceeds a yield threshold, we can simulate **permanent creases and folds** — exactly what Narain et al. achieve with their plastic curvature tensor `S_plastic`.
-
-## Algorithm
-
-After each simulation substep:
-
-1. **Measure elastic bending** for each edge: `Δθ = θ_current - θ_rest`
-2. **Check yield criterion**: if `|Δθ| > θ_yield`
-3. **Plastic flow**: update `θ_rest += (|Δθ| - θ_yield) * sign(Δθ)`
-4. **Track damage**: accumulate plastic strain for visualization
-5. **(Optional) Adaptive refinement**: split edges near sharp creases to better resolve fold geometry
-
-This mirrors ARCSim's `plastic_update()` which tracks face-level `S_plastic` and maps it back to edge rest angles.
-
-## Why it works
-
-- Newton already stores `edge_rest_angle` per edge — this is the natural target for plasticity
-- VBD is iterative and positional — injecting rest angle changes between substeps is stable
-- The yield criterion prevents noise from causing spurious creases
-- Damage accumulation allows material weakening at fold lines (lower yield threshold with repeated folding)
+Setting `edge_rest_angle` to match the dihedral angles of the pre-folded mesh allows VBD to treat the folded airplane as its equilibrium state. Shape deviation during flight is < 0.00001 RMS.
 
 ## Files
 
-- `example_cloth_crease.py` — Main sample: cloth dropping onto a wedge, forming permanent creases
-- `crease_plasticity.py` — The plasticity module (yield detection + rest angle update)
-- `requirements.txt` — Dependencies
+| File | Description |
+|------|-------------|
+| `dart_crash_rtx.py` | **Main demo** — dart crash with ViewerRTX rendering |
+| `crease_plasticity.py` | Crease plasticity module (Narain et al. 2013) |
+| `example_cloth_crease.py` | Reference: cloth dropping on wedge |
+| `create_dart_usd.py` | Tool: convert dart.obj to USD |
+| `dart.usda` | Paper airplane mesh in USD format |
+
+## Results
+
+- `newton_dart_crash.mp4` — Latest Newton VBD dart crash result
+
+## Dependencies
+
+- NVIDIA Newton (with Warp)
+- CUDA GPU (tested on NVIDIA L40)
 
 ## Usage
 
 ```bash
-pip install newton[examples]
-python example_cloth_crease.py
+python dart_crash_rtx.py
 ```
 
 ## References
 
-- Narain, R., Pfaff, T., O'Brien, J.F. "Folding and Crumpling Adaptive Sheets". ACM TOG 32(4), 2013.
-- Newton Physics Engine: https://github.com/newton-physics/newton
-- ARCSim source: http://graphics.berkeley.edu/resources/ARCSim/
+- Narain, R., Samii, A., O'Brien, J.F. (2012). "Adaptive Anisotropic Remeshing for Cloth Simulation." ACM TOG (SIGGRAPH Asia)
+- Narain, R., Pfaff, T., O'Brien, J.F. (2013). "Folding and Crumpling Adaptive Sheets." ACM TOG (SIGGRAPH)
