@@ -61,7 +61,11 @@ def main():
     print("=" * 60, flush=True)
 
     # --- Load folded dart mesh ---
-    raw_v, raw_f = parse_dart_obj('/home/horde/.openclaw/workspace/arcsim-0.2.1/meshes/dart.obj')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dart_obj_path = os.path.join(script_dir, 'meshes', 'dart.obj')
+    if not os.path.exists(dart_obj_path):
+        dart_obj_path = '/home/horde/.openclaw/workspace/arcsim-0.2.1/meshes/dart.obj'
+    raw_v, raw_f = parse_dart_obj(dart_obj_path)
     verts, faces = subdivide(raw_v, raw_f, 3)
 
     # Scale for visibility

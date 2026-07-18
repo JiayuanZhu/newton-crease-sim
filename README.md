@@ -28,16 +28,49 @@ Setting `edge_rest_angle` to match the dihedral angles of the pre-folded mesh al
 
 - `newton_dart_crash.mp4` — Latest Newton VBD dart crash result
 
-## Dependencies
+## Environment Setup
 
-- NVIDIA Newton (with Warp)
-- CUDA GPU (tested on NVIDIA L40)
+**Requirements:**
+- Linux (tested on Ubuntu 22.04)
+- NVIDIA GPU with CUDA (tested on L40, CUDA 12.9)
+- Python 3.10+
+
+**Install Warp:**
+```bash
+pip install warp-lang
+```
+
+**Install Newton (from source, dev build):**
+```bash
+git clone https://github.com/NVIDIA/newton.git
+cd newton
+pip install -e .
+```
+
+Newton is currently in early access / dev. If you have a released wheel:
+```bash
+pip install newton-physics
+```
+
+**Verify GPU:**
+```bash
+python -c "import warp as wp; wp.init(); print(wp.get_devices())"
+```
 
 ## Usage
 
 ```bash
 python dart_crash_rtx.py
 ```
+
+This will:
+1. Load `dart.obj` (from ARCSim) and subdivide to 369 verts / 640 faces
+2. Compute dihedral angles of the folded shape → set as VBD rest angles
+3. Simulate flight at 10 m/s into a wall
+4. Render with ViewerRTX (headless ray tracing)
+5. Output `newton_dart_crash.mp4`
+
+The `dart.obj` mesh is included in `meshes/`.
 
 ## References
 
