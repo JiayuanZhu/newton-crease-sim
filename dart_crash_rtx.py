@@ -73,6 +73,7 @@ import newton.viewer
 patch_imgui_for_newton()
 
 from crease_plasticity import CreasePlasticity, compute_dihedral_angles
+from strain_limiting import StrainLimiter
 from viewer_rtx_cuda import ViewerRTXCUDA
 
 DART_ROOT_PATH = "/World/Dart"
@@ -424,6 +425,23 @@ def parse_args():
         action="store_true",
         help="Disable CUDA Graph simulation capture for A/B performance comparison.",
     )
+    parser.add_argument(
+        "--max-stretch",
+        type=float,
+        default=1.005,
+        help="Maximum allowed edge stretch ratio (1.005 = 0.5%% elongation). Lower = stiffer.",
+    )
+    parser.add_argument(
+        "--strain-iters",
+        type=int,
+        default=3,
+        help="Number of strain limiting Jacobi iterations per substep.",
+    )
+    parser.add_argument(
+        "--no-strain-limit",
+        action="store_true",
+        help="Disable strain limiting (revert to pure VBD behavior).",
+    )
     return parser.parse_args()
 
 
@@ -551,6 +569,24 @@ def main():
         f"(hard impact still plasticizes them)",
         flush=True,
     )
+
+    # --- Strain Limiter (post-step edge projection) ---
+    strain_limiter = None
+    if not args.no_strain_limit:
+        strain_limiter = StrainLimiter(
+            model=model,
+            max_stretch=args.max_stretch,
+            iterations=args.strain_iters,
+            velocity_damping=0.8,
+        )
+        print(
+            f"  Strain limiting: ON (max_stretch={args.max_stretch}, "
+            f"iters={args.strain_iters})",
+            flush=True,
+        )
+    else:
+        print("  Strain limiting: OFF", flush=True)
+
     print(
         f"  Self-contact: ON (r={SELF_CONTACT_RADIUS*1000:.1f} mm, "
         f"rest-exclude<{SELF_CONTACT_REST_EXCLUSION*1000:.0f} mm)",
@@ -566,6 +602,9 @@ def main():
             state_0.clear_forces()
             model.collide(state_0, contacts, collision_pipeline=collision_pipeline)
             solver.step(state_0, state_1, control, contacts, sim_dt)
+            # --- Strain limiting: enforce max edge stretch ---
+            if strain_limiter is not None:
+                strain_limiter.limit(state_1, dt=sim_dt)
             # Dissipate wall-exit velocity before plasticity (inelastic crush).
             wp.launch(
                 damp_wall_separation,
@@ -799,10 +838,13 @@ def main():
             new_creased = np.sum(delta > 0.01)
             soft_n = int(contacts.soft_contact_count.numpy()[0])
             measured_fps = len(frame_times) / sum(frame_times)
+            max_s_info = ""
+            if strain_limiter is not None:
+                max_s_info = f" max_stretch:{strain_limiter.get_max_stretch_ratio(state_0):.4f}"
 
             print(
                 f"  [t={sim_time:.2f}s] COM:({com[0]:.2f},{com[1]:.2f},{com[2]:.2f}) "
-                f"shape_rms:{rms:.5f} soft:{soft_n} new_crease:{new_creased} "
+                f"shape_rms:{rms:.5f} soft:{soft_n} new_crease:{new_creased}{max_s_info} "
                 f"FPS:{measured_fps:.1f} upload:{viewer.mesh_upload_ms:.3f}ms "
                 f"[{viewer.mesh_upload_mode.upper()}]",
                 flush=True,
